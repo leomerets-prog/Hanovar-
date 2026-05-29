@@ -78,7 +78,6 @@
   }
   /* Acessibilidade: respeita preferência de "reduzir movimento" */
   @media (prefers-reduced-motion: reduce) {
-    .announcement-track { animation: none; }
     .announcement-content { padding: 0 16px; }
   }
 
@@ -346,7 +345,8 @@
   .link-underline:hover::after { width: 100%; }
 
   /* ===== CATEGORIES GRID ===== */
-  .categories-section { max-width: 1280px; margin: 0 auto; padding-bottom: 144px; }
+  .categories-section { max-width: 1280px; margin: 0 auto; padding-top: 80px; padding-bottom: 144px; }
+  @media (min-width: 768px) { .categories-section { padding-top: 120px; } }
   .categories-header { text-align: center; margin-bottom: 64px; }
   .categories-grid {
     display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;
@@ -1508,23 +1508,19 @@
   <div class="announcement-track">
     <!-- Duplicado pra criar loop infinito sem corte -->
     <div class="announcement-content">
-      <span class="announcement-item">✦ Frete grátis nas compras acima de R$ 200</span>
-      <span class="announcement-sep">·</span>
-      <span class="announcement-item">Parcele em até 3x sem juros no cartão</span>
+      <span class="announcement-item">✦ Novidades todos os meses</span>
       <span class="announcement-sep">·</span>
       <span class="announcement-item">Atendimento personalizado pelo WhatsApp</span>
       <span class="announcement-sep">·</span>
-      <span class="announcement-item">Novidades semanais na coleção</span>
+      <span class="announcement-item">Parcelamento em até 3x sem juros</span>
       <span class="announcement-sep">·</span>
     </div>
     <div class="announcement-content" aria-hidden="true">
-      <span class="announcement-item">✦ Frete grátis nas compras acima de R$ 200</span>
-      <span class="announcement-sep">·</span>
-      <span class="announcement-item">Parcele em até 3x sem juros no cartão</span>
+      <span class="announcement-item">✦ Novidades todos os meses</span>
       <span class="announcement-sep">·</span>
       <span class="announcement-item">Atendimento personalizado pelo WhatsApp</span>
       <span class="announcement-sep">·</span>
-      <span class="announcement-item">Novidades semanais na coleção</span>
+      <span class="announcement-item">Parcelamento em até 3x sem juros</span>
       <span class="announcement-sep">·</span>
     </div>
   </div>
