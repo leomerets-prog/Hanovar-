@@ -3108,7 +3108,7 @@ async function submitCheckout(e) {
     sendCheckoutWhatsApp(fullOrder);
 
     setTimeout(() => {
-      alert('Pedido #' + String(fullOrder.num).padStart(3, '0') + ' enviado! Em breve entraremos em contato pelo WhatsApp.');
+      alert('Pedido enviado! Em breve entraremos em contato pelo WhatsApp.');
     }, 300);
   } catch (err) {
     console.error('submitCheckout', err);
@@ -3120,11 +3120,11 @@ async function submitCheckout(e) {
 
 function sendCheckoutWhatsApp(order) {
   let msg = `Olá! Sou ${order.client.name}.\n\n`;
-  msg += `Acabei de fazer o pedido #${String(order.num).padStart(3, '0')} no site da Hanovar com as seguintes peças:\n\n`;
+  msg += `Acabei de fazer um pedido no site da Hanovar com as seguintes peças:\n\n`;
   order.items.forEach(item => {
     msg += `• ${item.name} — Tam ${item.size}\n`;
   });
-  msg += `\nAguardo retorno com os valores, disponibilidade e detalhes de entrega 🤍`;
+  msg += `\nAguardo retorno com os valores, disponibilidade e detalhes de entrega.`;
 
   const url = `https://wa.me/${BRAND.whatsapp}?text=${encodeURIComponent(msg)}`;
   window.open(url, '_blank');
