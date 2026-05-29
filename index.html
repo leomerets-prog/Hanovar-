@@ -1450,6 +1450,7 @@
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: #d4ccc0; border-radius: 3px; }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
 
@@ -1760,8 +1761,8 @@
 
       <form id="loginForm" onsubmit="handleLogin(event)" style="display:flex; flex-direction:column; gap:20px;">
         <div style="text-align:left;">
-          <label class="form-label">Usuário</label>
-          <input type="text" id="loginUser" class="form-input" required autocomplete="username">
+          <label class="form-label">E-mail</label>
+          <input type="email" id="loginUser" class="form-input" required autocomplete="username">
         </div>
         <div style="text-align:left;">
           <label class="form-label">Senha</label>
@@ -2471,20 +2472,150 @@ function setupContacts() {
 // ============================================
 // ADMIN — autenticação e gerenciamento de peças
 // ============================================
-const ADMIN_USER = 'Leonardo';
-const ADMIN_PASS = 'leo12345';
+
+// ---- Configuração Supabase ----
+const SUPABASE_URL = 'https://thzbnjcussddwujowzmb.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_OvKsrKSK7QbZnx_wgraWxg_rOlD90XT';
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 let isLoggedIn = false;
-let userProducts = []; // Peças cadastradas pelo admin
-let productOverrides = {}; // Edições em peças padrão: {id: {campos}}
-let deletedDefaults = []; // IDs de peças padrão removidas
+let currentUser = null;
+let userProducts = []; // Peças cadastradas pelo admin (vêm do Supabase)
+let productOverrides = {}; // Edições em peças padrão (apenas localStorage — preview)
+let deletedDefaults = []; // IDs de peças padrão removidas (apenas localStorage — preview)
 let editingProductId = null;
 
-// Carrega peças do localStorage
+// ---- Wrapper de banco ----
+const db = {
+  // PRODUCTS
+  async fetchProducts() {
+    const { data, error } = await supabase
+      .from('products')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) { console.error('fetchProducts', error); return []; }
+    // Converte do formato do banco pro formato usado no front
+    return data.map(p => ({
+      id: p.id,
+      name: p.name,
+      description: p.description,
+      category: p.category,
+      price: parseFloat(p.price),
+      img: p.img_url,
+      sizes: Object.keys(p.sizes || {}),
+      stock: p.sizes || {},
+      onSale: false,
+      paused: !p.is_active,
+    }));
+  },
+
+  async upsertProduct(prod, existingId) {
+    // sizes do front é array; stock é objeto {S: true, M: false}
+    const sizesObj = {};
+    (prod.sizes || []).forEach(s => {
+      sizesObj[s] = prod.stock && prod.stock[s] !== false;
+    });
+    const row = {
+      name: prod.name,
+      description: prod.description,
+      category: prod.category,
+      price: prod.price,
+      img_url: prod.img,
+      sizes: sizesObj,
+      is_active: !prod.paused,
+    };
+    if (existingId) {
+      const { data, error } = await supabase
+        .from('products').update(row).eq('id', existingId).select().single();
+      if (error) throw error;
+      return data;
+    } else {
+      const { data, error } = await supabase
+        .from('products').insert(row).select().single();
+      if (error) throw error;
+      return data;
+    }
+  },
+
+  async deleteProduct(id) {
+    const { error } = await supabase.from('products').delete().eq('id', id);
+    if (error) throw error;
+  },
+
+  async uploadProductImage(file) {
+    const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
+    const filename = `${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`;
+    const { error } = await supabase.storage
+      .from('product-images')
+      .upload(filename, file, { cacheControl: '31536000', upsert: false });
+    if (error) throw error;
+    const { data } = supabase.storage.from('product-images').getPublicUrl(filename);
+    return data.publicUrl;
+  },
+
+  // ORDERS
+  async fetchOrders() {
+    const { data: ords, error } = await supabase
+      .from('orders').select('*').order('created_at', { ascending: false });
+    if (error) { console.error('fetchOrders', error); return []; }
+    const { data: items, error: e2 } = await supabase.from('order_items').select('*');
+    if (e2) { console.error('fetchOrderItems', e2); return []; }
+    return ords.map(o => ({
+      id: o.id,
+      num: o.num,
+      createdAt: o.created_at,
+      status: o.status,
+      client: { name: o.customer_name, phone: o.phone || '', address: o.address || '', notes: o.notes || '' },
+      items: items.filter(i => i.order_id === o.id).map(i => ({
+        uid: i.id,
+        id: i.product_id,
+        name: i.product_name,
+        img: i.product_img,
+        size: i.size,
+        price: parseFloat(i.price),
+        decision: i.decision,
+      })),
+      history: [],
+    }));
+  },
+
+  async createOrder(order) {
+    const { data: created, error } = await supabase.from('orders').insert({
+      customer_name: order.client.name,
+      phone: order.client.phone || '',
+      address: order.client.address || '',
+      notes: order.client.notes || '',
+      total: order.items.reduce((s, i) => s + (i.price || 0), 0),
+      status: 'pending',
+    }).select().single();
+    if (error) throw error;
+    const itemsRows = order.items.map(it => ({
+      order_id: created.id,
+      product_id: (typeof it.id === 'string' && it.id.length === 36) ? it.id : null,
+      product_name: it.name,
+      product_img: it.img || null,
+      size: it.size,
+      price: it.price || 0,
+    }));
+    const { error: e2 } = await supabase.from('order_items').insert(itemsRows);
+    if (e2) throw e2;
+    return created;
+  },
+
+  async updateOrderStatus(orderId, status) {
+    const { error } = await supabase.from('orders').update({ status }).eq('id', orderId);
+    if (error) throw error;
+  },
+
+  async updateOrderItem(itemUid, decision) {
+    const { error } = await supabase.from('order_items').update({ decision }).eq('id', itemUid);
+    if (error) throw error;
+  },
+};
+
+// Carrega overrides locais (peças padrão são só decoração; edições locais não vão pro banco)
 function loadUserProducts() {
   try {
-    const saved = localStorage.getItem('hanovar-products');
-    if (saved) userProducts = JSON.parse(saved);
     const overrides = localStorage.getItem('hanovar-overrides');
     if (overrides) productOverrides = JSON.parse(overrides);
     const deleted = localStorage.getItem('hanovar-deleted');
@@ -2493,17 +2624,31 @@ function loadUserProducts() {
 }
 function saveUserProducts() {
   try {
-    localStorage.setItem('hanovar-products', JSON.stringify(userProducts));
     localStorage.setItem('hanovar-overrides', JSON.stringify(productOverrides));
     localStorage.setItem('hanovar-deleted', JSON.stringify(deletedDefaults));
   } catch (e) {}
 }
 
-// Verifica sessão de login
-function checkSession() {
+// Recarrega peças do banco e renderiza
+async function refreshProductsFromDB() {
   try {
-    isLoggedIn = sessionStorage.getItem('hanovar-admin') === 'true';
-  } catch (e) { isLoggedIn = false; }
+    userProducts = await db.fetchProducts();
+  } catch (e) {
+    console.error('refreshProductsFromDB', e);
+  }
+  try { renderProducts(); } catch(e){}
+  try { renderSaleProducts(); } catch(e){}
+  try { renderCategoriesGrid(); } catch(e){}
+  try { renderAdminDashboard(); } catch(e){}
+}
+
+// Verifica sessão de login (Supabase)
+async function checkSession() {
+  try {
+    const { data } = await supabase.auth.getSession();
+    isLoggedIn = !!data.session;
+    currentUser = data.session ? data.session.user : null;
+  } catch (e) { isLoggedIn = false; currentUser = null; }
 }
 
 // Combina peças default + cadastradas pelo admin, aplicando edições e remoções
@@ -2530,26 +2675,37 @@ function getVisibleProducts() {
 }
 
 // LOGIN
-function handleLogin(e) {
+async function handleLogin(e) {
   e.preventDefault();
-  const user = document.getElementById('loginUser').value.trim();
-  const pass = document.getElementById('loginPass').value;
+  const email = document.getElementById('loginUser').value.trim();
+  const password = document.getElementById('loginPass').value;
   const errorEl = document.getElementById('loginError');
+  const btn = e.target.querySelector('button[type="submit"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Entrando...'; }
 
-  if (user === ADMIN_USER && pass === ADMIN_PASS) {
+  try {
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) throw error;
     isLoggedIn = true;
-    try { sessionStorage.setItem('hanovar-admin', 'true'); } catch(e) {}
+    currentUser = data.user;
     errorEl.style.display = 'none';
     document.getElementById('loginForm').reset();
+    await refreshProductsFromDB();
+    await loadOrders();
     navigate('admin');
-  } else {
+  } catch (err) {
+    console.error('login', err);
+    errorEl.textContent = 'E-mail ou senha incorretos';
     errorEl.style.display = 'block';
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Entrar'; }
   }
 }
 
-function logout() {
+async function logout() {
+  try { await supabase.auth.signOut(); } catch (e) {}
   isLoggedIn = false;
-  try { sessionStorage.removeItem('hanovar-admin'); } catch(e) {}
+  currentUser = null;
   navigate('home');
 }
 
@@ -2587,9 +2743,9 @@ function renderAdminDashboard() {
       <div class="admin-row-category">${p.category}</div>
       <div class="admin-row-category">${formatSizesWithStock(p)}</div>
       <div class="admin-row-actions">
-        <button class="admin-btn-icon" onclick="togglePauseProduct(${p.id})" title="${p.paused ? 'Reativar peça' : 'Pausar peça (oculta do site)'}">${p.paused ? 'Reativar' : 'Pausar'}</button>
-        <button class="admin-btn-icon" onclick="editProduct(${p.id})">Editar</button>
-        <button class="admin-btn-icon danger" onclick="deleteProduct(${p.id})">Remover</button>
+        <button class="admin-btn-icon" onclick="togglePauseProduct('${p.id}')" title="${p.paused ? 'Reativar peça' : 'Pausar peça (oculta do site)'}">${p.paused ? 'Reativar' : 'Pausar'}</button>
+        <button class="admin-btn-icon" onclick="editProduct('${p.id}')">Editar</button>
+        <button class="admin-btn-icon danger" onclick="deleteProduct('${p.id}')">Remover</button>
       </div>
     </div>
   `;
@@ -2606,20 +2762,30 @@ function formatSizesWithStock(p) {
 }
 
 // Pausar/reativar qualquer peça
-function togglePauseProduct(id) {
-  const userIdx = userProducts.findIndex(p => p.id === id);
-  if (userIdx >= 0) {
-    userProducts[userIdx].paused = !userProducts[userIdx].paused;
-  } else {
-    // Peça padrão — salva no override
-    const currentPaused = productOverrides[id]?.paused || false;
-    productOverrides[id] = { ...productOverrides[id], paused: !currentPaused };
+async function togglePauseProduct(id) {
+  const isPadrao = !String(id).includes('-');
+  if (isPadrao) {
+    const numId = parseInt(id);
+    const currentPaused = productOverrides[numId]?.paused || false;
+    productOverrides[numId] = { ...productOverrides[numId], paused: !currentPaused };
+    saveUserProducts();
+    await refreshProductsFromDB();
+    return;
   }
-  saveUserProducts();
-  renderAdminDashboard();
-  renderProducts();
-  renderSaleProducts();
-  renderCategoriesGrid();
+  // Peça do banco — alterna is_active
+  const prod = userProducts.find(p => String(p.id) === String(id));
+  if (!prod) return;
+  try {
+    const { error } = await supabase
+      .from('products')
+      .update({ is_active: prod.paused ? true : false }) // se estava pausado, reativa
+      .eq('id', id);
+    if (error) throw error;
+  } catch (err) {
+    alert('Erro: ' + (err.message || err));
+    return;
+  }
+  await refreshProductsFromDB();
 }
 
 // FORMULÁRIO DE PEÇA
@@ -2713,7 +2879,7 @@ function openProductForm(productId = null) {
 
   if (productId) {
     // Busca em todos os produtos (já aplica overrides)
-    const p = getAllProducts().find(x => x.id === productId);
+    const p = getAllProducts().find(x => String(x.id) === String(productId));
     if (p) {
       document.getElementById('formTitle').textContent = 'Editar peça';
       document.getElementById('formProductId').value = p.id;
@@ -2749,7 +2915,7 @@ function closeProductForm(e) {
   editingProductId = null;
 }
 
-function handleProductSubmit(e) {
+async function handleProductSubmit(e) {
   e.preventDefault();
 
   const sizes = [...currentFormSelectedSizes];
@@ -2769,68 +2935,80 @@ function handleProductSubmit(e) {
     stock[s] = currentFormStock[s] !== false;
   });
 
-  const data = {
-    name: document.getElementById('formName').value.trim(),
-    category: document.getElementById('formCategory').value,
-    price: parseFloat(document.getElementById('formPrice').value) || 0,
-    img: currentFormImageData,
-    description: document.getElementById('formDesc').value.trim(),
-    sizes: sizes,
-    stock: stock,
-    onSale: document.getElementById('formOnSale').checked,
-    paused: document.getElementById('formPaused').checked,
-  };
-
-  const existingId = document.getElementById('formProductId').value;
-  if (existingId) {
-    const id = parseInt(existingId);
-    const userIdx = userProducts.findIndex(p => p.id === id);
-    if (userIdx >= 0) {
-      // Peça cadastrada pelo admin → edita direto
-      userProducts[userIdx] = { ...userProducts[userIdx], ...data };
-    } else {
-      // Peça padrão → salva como override
-      productOverrides[id] = { ...data };
-    }
-  } else {
-    // Novo ID — começa em 1000 pra não conflitar com os padrão
-    const maxId = Math.max(999, ...userProducts.map(p => p.id));
-    userProducts.push({ id: maxId + 1, ...data });
-  }
+  const submitBtn = e.target.querySelector('button[type="submit"]');
+  if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Salvando...'; }
 
   try {
-    saveUserProducts();
-  } catch (err) {
-    alert('Erro ao salvar. O navegador pode ter atingido o limite de armazenamento local. Considere usar URLs ao invés de uploads grandes.');
-    return;
-  }
+    // Se a imagem é base64 (upload), envia pro Storage; se é URL, mantém
+    let imgUrl = currentFormImageData;
+    if (imgUrl.startsWith('data:')) {
+      // Converte base64 -> Blob -> File pra fazer upload
+      const res = await fetch(imgUrl);
+      const blob = await res.blob();
+      const file = new File([blob], 'peca.jpg', { type: blob.type || 'image/jpeg' });
+      imgUrl = await db.uploadProductImage(file);
+    }
 
-  closeProductForm();
-  renderAdminDashboard();
-  renderProducts();
-  renderSaleProducts();
+    const data = {
+      name: document.getElementById('formName').value.trim(),
+      category: document.getElementById('formCategory').value,
+      price: parseFloat(document.getElementById('formPrice').value) || 0,
+      img: imgUrl,
+      description: document.getElementById('formDesc').value.trim(),
+      sizes: sizes,
+      stock: stock,
+      onSale: document.getElementById('formOnSale').checked,
+      paused: document.getElementById('formPaused').checked,
+    };
+
+    const existingId = document.getElementById('formProductId').value;
+    // Peça padrão tem ID numérico (do array PRODUCTS); peça do banco tem UUID (string com hífens)
+    const isPadrao = existingId && !existingId.includes('-');
+
+    if (existingId && !isPadrao) {
+      // Edita peça do banco
+      await db.upsertProduct(data, existingId);
+    } else if (isPadrao) {
+      // Peça padrão → salva como override local (preview)
+      productOverrides[parseInt(existingId)] = { ...data };
+      saveUserProducts();
+    } else {
+      // Nova peça → insere no banco
+      await db.upsertProduct(data);
+    }
+
+    await refreshProductsFromDB();
+    closeProductForm();
+  } catch (err) {
+    console.error('handleProductSubmit', err);
+    alert('Erro ao salvar: ' + (err.message || err));
+  } finally {
+    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Salvar'; }
+  }
 }
 
 function editProduct(id) {
   openProductForm(id);
 }
 
-function deleteProduct(id) {
+async function deleteProduct(id) {
   if (!confirm('Tem certeza que deseja remover esta peça? Esta ação pode ser desfeita restaurando o catálogo padrão.')) return;
-  const userIdx = userProducts.findIndex(p => p.id === id);
-  if (userIdx >= 0) {
-    // Peça cadastrada pelo admin → remove de vez
-    userProducts.splice(userIdx, 1);
+  // Peça padrão tem ID numérico; peça do banco tem UUID (string com hífens)
+  const isPadrao = typeof id === 'number' || (typeof id === 'string' && !id.includes('-'));
+  if (isPadrao) {
+    const numId = parseInt(id);
+    if (!deletedDefaults.includes(numId)) deletedDefaults.push(numId);
+    delete productOverrides[numId];
+    saveUserProducts();
   } else {
-    // Peça padrão → marca como deletada e limpa override se houver
-    if (!deletedDefaults.includes(id)) deletedDefaults.push(id);
-    delete productOverrides[id];
+    try {
+      await db.deleteProduct(id);
+    } catch (err) {
+      alert('Erro ao remover: ' + (err.message || err));
+      return;
+    }
   }
-  saveUserProducts();
-  renderAdminDashboard();
-  renderProducts();
-  renderSaleProducts();
-  renderCategoriesGrid();
+  await refreshProductsFromDB();
 }
 
 // Restaura todas as peças padrão removidas e desfaz todas as edições
@@ -2862,19 +3040,14 @@ const ORDER_STATUS_LABELS = {
   cancelled: 'Cancelado'
 };
 
-function loadOrders() {
+async function loadOrders() {
   try {
-    const saved = localStorage.getItem('hanovar-orders');
-    if (saved) orders = JSON.parse(saved);
-  } catch (e) {}
+    orders = await db.fetchOrders();
+    try { renderOrders(); } catch(e){}
+  } catch (e) { console.error('loadOrders', e); }
 }
-function saveOrders() {
-  try {
-    localStorage.setItem('hanovar-orders', JSON.stringify(orders));
-  } catch (e) {
-    alert('Erro ao salvar pedido. Espaço de armazenamento esgotado.');
-  }
-}
+// stub mantido pra retrocompatibilidade — escrita acontece nas funções específicas
+function saveOrders() { /* no-op: Supabase é a fonte da verdade */ }
 
 // Gera próximo número de pedido
 function getNextOrderNum() {
@@ -2896,7 +3069,7 @@ function closeCheckoutForm(e) {
   document.body.style.overflow = '';
 }
 
-function submitCheckout(e) {
+async function submitCheckout(e) {
   e.preventDefault();
 
   const name = document.getElementById('checkoutName').value.trim();
@@ -2904,47 +3077,46 @@ function submitCheckout(e) {
   const address = '';
   const notes = '';
 
-  // Cria pedido com status "pending" (aguardando confirmação do admin)
-  const orderNum = getNextOrderNum();
+  const submitBtn = e.target.querySelector('button[type="submit"]');
+  if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Enviando...'; }
+
   const newOrder = {
-    id: 'order_' + Date.now(),
-    num: orderNum,
-    createdAt: new Date().toISOString(),
-    status: 'pending',
     client: { name, phone, address, notes },
-    items: cart.map(item => ({
-      ...item,
-      decision: null // 'sold' | 'returned' | null (ainda não finalizado)
-    })),
-    history: [
-      { status: 'pending', at: new Date().toISOString(), note: 'Pedido criado pela cliente' }
-    ]
+    items: cart.map(item => ({ ...item, decision: null })),
   };
 
-  orders.unshift(newOrder); // adiciona no topo
-  saveOrders();
+  try {
+    const created = await db.createOrder(newOrder);
+    // Recarrega pedidos pra ter o nº de pedido oficial gerado pelo banco
+    await loadOrders();
+    const fullOrder = orders.find(o => o.id === created.id) || {
+      ...newOrder, id: created.id, num: created.num, createdAt: created.created_at, status: 'pending'
+    };
 
-  // Reserva os itens no estoque (marca como reservado)
-  reserveItems(newOrder.items);
+    // Reserva os itens no estoque (local — apenas visual)
+    reserveItems(fullOrder.items);
 
-  // Limpa o carrinho
-  cart = [];
-  saveCart();
-  updateCartCount();
-  renderCart();
+    // Limpa o carrinho
+    cart = [];
+    saveCart();
+    updateCartCount();
+    renderCart();
 
-  // Fecha modais
-  closeCheckoutForm();
-  closeCart();
-  document.getElementById('checkoutForm').reset();
+    closeCheckoutForm();
+    closeCart();
+    document.getElementById('checkoutForm').reset();
 
-  // Envia mensagem do WhatsApp com nº do pedido
-  sendCheckoutWhatsApp(newOrder);
+    sendCheckoutWhatsApp(fullOrder);
 
-  // Mostra confirmação
-  setTimeout(() => {
-    alert(`Pedido #${String(orderNum).padStart(3, '0')} criado!\n\nVocê foi direcionada ao WhatsApp para confirmação. As peças foram reservadas pra você.`);
-  }, 300);
+    setTimeout(() => {
+      alert('Pedido #' + String(fullOrder.num).padStart(3, '0') + ' enviado! Em breve entraremos em contato pelo WhatsApp.');
+    }, 300);
+  } catch (err) {
+    console.error('submitCheckout', err);
+    alert('Erro ao enviar pedido: ' + (err.message || err));
+  } finally {
+    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Enviar pedido'; }
+  }
 }
 
 function sendCheckoutWhatsApp(order) {
@@ -3019,16 +3191,25 @@ function returnItemToStock(productId, size) {
 }
 
 // AÇÕES DO PEDIDO
-function updateOrderStatus(orderId, newStatus, note) {
+async function updateOrderStatus(orderId, newStatus, note) {
   const order = orders.find(o => o.id === orderId);
   if (!order) return;
+  const prevStatus = order.status;
   order.status = newStatus;
+  if (!order.history) order.history = [];
   order.history.push({
     status: newStatus,
     at: new Date().toISOString(),
     note: note || ''
   });
-  saveOrders();
+  try {
+    await db.updateOrderStatus(orderId, newStatus);
+  } catch (err) {
+    console.error('updateOrderStatus', err);
+    order.status = prevStatus;
+    alert('Erro ao atualizar pedido: ' + (err.message || err));
+    return;
+  }
   renderOrders();
   updatePendingBadge();
 }
@@ -3103,25 +3284,30 @@ function setFinalizeDecision(itemUid, decision) {
   renderFinalizeItems();
 }
 
-function confirmFinalize() {
+async function confirmFinalize() {
   if (!currentFinalizingOrder) return;
   const order = currentFinalizingOrder;
 
   // Aplica decisões em cada item
-  order.items.forEach(item => {
-    const decision = finalizeDecisions[item.uid];
-    item.decision = decision;
-    if (decision === 'returned') {
-      // Devolve ao estoque
-      returnItemToStock(item.id, item.size);
+  try {
+    for (const item of order.items) {
+      const decision = finalizeDecisions[item.uid];
+      item.decision = decision;
+      await db.updateOrderItem(item.uid, decision);
+      if (decision === 'returned') {
+        returnItemToStock(item.id, item.size);
+      }
     }
-    // Se 'sold', a peça já estava fora do estoque (reservada) — fica fora definitivamente
-  });
+  } catch (err) {
+    console.error('confirmFinalize', err);
+    alert('Erro ao finalizar pedido: ' + (err.message || err));
+    return;
+  }
 
   const soldCount = order.items.filter(i => i.decision === 'sold').length;
   const returnedCount = order.items.filter(i => i.decision === 'returned').length;
   const note = `Finalizado: ${soldCount} vendida(s), ${returnedCount} devolvida(s)`;
-  updateOrderStatus(order.id, 'completed', note);
+  await updateOrderStatus(order.id, 'completed', note);
   closeFinalizeModal();
 }
 
@@ -3486,18 +3672,23 @@ function showMusicStatus(msg, isError) {
 // ============================================
 // INIT
 // ============================================
-loadUserProducts();
-loadOrders();
-checkSession();
+loadUserProducts(); // overrides locais
 loadCart();
 updateCartCount();
 renderCategoriesGrid();
 renderFilters();
-renderProducts();
-renderSaleProducts();
 renderManifesto();
-tryAutoplay();
 setupContacts();
+tryAutoplay();
+
+// Bootstrap assíncrono — Supabase
+(async function bootstrap() {
+  await checkSession();
+  await refreshProductsFromDB();
+  if (isLoggedIn) {
+    await loadOrders();
+  }
+})();
 </script>
 
 </body>
