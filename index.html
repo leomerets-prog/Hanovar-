@@ -2576,17 +2576,21 @@ const db = {
   },
 
   async createOrder(order) {
-    const { data: created, error } = await sb.from('orders').insert({
+    const totalVal = order.items.reduce((s, i) => s + (i.price || 0), 0);
+    // Gera UUID no cliente pra não depender de SELECT depois do INSERT
+    const orderId = crypto.randomUUID();
+    const { error } = await sb.from('orders').insert({
+      id: orderId,
       customer_name: order.client.name,
       phone: order.client.phone || '',
       address: order.client.address || '',
       notes: order.client.notes || '',
-      total: order.items.reduce((s, i) => s + (i.price || 0), 0),
+      total: totalVal,
       status: 'pending',
-    }).select().single();
+    });
     if (error) throw error;
     const itemsRows = order.items.map(it => ({
-      order_id: created.id,
+      order_id: orderId,
       product_id: (typeof it.id === 'string' && it.id.length === 36) ? it.id : null,
       product_name: it.name,
       product_img: it.img || null,
@@ -2595,7 +2599,7 @@ const db = {
     }));
     const { error: e2 } = await sb.from('order_items').insert(itemsRows);
     if (e2) throw e2;
-    return created;
+    return { id: orderId, num: null, created_at: new Date().toISOString() };
   },
 
   async updateOrderStatus(orderId, status) {
