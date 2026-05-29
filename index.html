@@ -2474,9 +2474,9 @@ function setupContacts() {
 // ============================================
 
 // ---- Configuração Supabase ----
-const SUPABASE_URL = 'https://thzbnjcussddwujowzmb.supabase.co';
+const SUPABASE_URL = 'https://thzbnjcussddwujowzmb.sb.co';
 const SUPABASE_KEY = 'sb_publishable_OvKsrKSK7QbZnx_wgraWxg_rOlD90XT';
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 let isLoggedIn = false;
 let currentUser = null;
@@ -2489,8 +2489,7 @@ let editingProductId = null;
 const db = {
   // PRODUCTS
   async fetchProducts() {
-    const { data, error } = await supabase
-      .from('products')
+    const { data, error } = await sb.from('products')
       .select('*')
       .order('created_at', { ascending: false });
     if (error) { console.error('fetchProducts', error); return []; }
@@ -2525,40 +2524,37 @@ const db = {
       is_active: !prod.paused,
     };
     if (existingId) {
-      const { data, error } = await supabase
-        .from('products').update(row).eq('id', existingId).select().single();
+      const { data, error } = await sb.from('products').update(row).eq('id', existingId).select().single();
       if (error) throw error;
       return data;
     } else {
-      const { data, error } = await supabase
-        .from('products').insert(row).select().single();
+      const { data, error } = await sb.from('products').insert(row).select().single();
       if (error) throw error;
       return data;
     }
   },
 
   async deleteProduct(id) {
-    const { error } = await supabase.from('products').delete().eq('id', id);
+    const { error } = await sb.from('products').delete().eq('id', id);
     if (error) throw error;
   },
 
   async uploadProductImage(file) {
     const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
     const filename = `${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`;
-    const { error } = await supabase.storage
+    const { error } = await sb.storage
       .from('product-images')
       .upload(filename, file, { cacheControl: '31536000', upsert: false });
     if (error) throw error;
-    const { data } = supabase.storage.from('product-images').getPublicUrl(filename);
+    const { data } = sb.storage.from('product-images').getPublicUrl(filename);
     return data.publicUrl;
   },
 
   // ORDERS
   async fetchOrders() {
-    const { data: ords, error } = await supabase
-      .from('orders').select('*').order('created_at', { ascending: false });
+    const { data: ords, error } = await sb.from('orders').select('*').order('created_at', { ascending: false });
     if (error) { console.error('fetchOrders', error); return []; }
-    const { data: items, error: e2 } = await supabase.from('order_items').select('*');
+    const { data: items, error: e2 } = await sb.from('order_items').select('*');
     if (e2) { console.error('fetchOrderItems', e2); return []; }
     return ords.map(o => ({
       id: o.id,
@@ -2580,7 +2576,7 @@ const db = {
   },
 
   async createOrder(order) {
-    const { data: created, error } = await supabase.from('orders').insert({
+    const { data: created, error } = await sb.from('orders').insert({
       customer_name: order.client.name,
       phone: order.client.phone || '',
       address: order.client.address || '',
@@ -2597,18 +2593,18 @@ const db = {
       size: it.size,
       price: it.price || 0,
     }));
-    const { error: e2 } = await supabase.from('order_items').insert(itemsRows);
+    const { error: e2 } = await sb.from('order_items').insert(itemsRows);
     if (e2) throw e2;
     return created;
   },
 
   async updateOrderStatus(orderId, status) {
-    const { error } = await supabase.from('orders').update({ status }).eq('id', orderId);
+    const { error } = await sb.from('orders').update({ status }).eq('id', orderId);
     if (error) throw error;
   },
 
   async updateOrderItem(itemUid, decision) {
-    const { error } = await supabase.from('order_items').update({ decision }).eq('id', itemUid);
+    const { error } = await sb.from('order_items').update({ decision }).eq('id', itemUid);
     if (error) throw error;
   },
 };
@@ -2645,7 +2641,7 @@ async function refreshProductsFromDB() {
 // Verifica sessão de login (Supabase)
 async function checkSession() {
   try {
-    const { data } = await supabase.auth.getSession();
+    const { data } = await sb.auth.getSession();
     isLoggedIn = !!data.session;
     currentUser = data.session ? data.session.user : null;
   } catch (e) { isLoggedIn = false; currentUser = null; }
@@ -2684,7 +2680,7 @@ async function handleLogin(e) {
   if (btn) { btn.disabled = true; btn.textContent = 'Entrando...'; }
 
   try {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error } = await sb.auth.signInWithPassword({ email, password });
     if (error) throw error;
     isLoggedIn = true;
     currentUser = data.user;
@@ -2703,7 +2699,7 @@ async function handleLogin(e) {
 }
 
 async function logout() {
-  try { await supabase.auth.signOut(); } catch (e) {}
+  try { await sb.auth.signOut(); } catch (e) {}
   isLoggedIn = false;
   currentUser = null;
   navigate('home');
@@ -2776,8 +2772,7 @@ async function togglePauseProduct(id) {
   const prod = userProducts.find(p => String(p.id) === String(id));
   if (!prod) return;
   try {
-    const { error } = await supabase
-      .from('products')
+    const { error } = await sb.from('products')
       .update({ is_active: prod.paused ? true : false }) // se estava pausado, reativa
       .eq('id', id);
     if (error) throw error;
